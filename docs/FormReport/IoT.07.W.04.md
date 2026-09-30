@@ -13,11 +13,11 @@
 
 ### 1. Cam kết tuần trước
 
-- Tìm hiểu về các mô hình bao gồm: OSI, TCP/IP, UDP. Hiểu được và trình bày được về các giao thức TCO và UDP.
+- Tìm hiểu về các mô hình bao gồm: OSI, TCP/IP, UDP. Hiểu được và trình bày được về các giao thức TCP và UDP.
 
 - Tìm hiểu về Socket Programming: Hiểu và thực hành được  các hàm để lập trình socket.
 
-- Capture dữ liệu để thấy được luồng hoạt động của các giao thức
+- Capture dữ liệu để thấy được luồng hoạt động của các giao thức.
 
 ---
 
@@ -53,11 +53,11 @@ https://github.com/luongduc-0712/ZerotoHeroWithQUIC/tree/main/src/Demo/W4
 ### 4. Cam kết tuần tới
 
 1. **Mục tiêu 1:** Tìm hiểu về các khái niệm cơ bản trong Network
-   - Công việc thực hiện: Tìm hiểu về Transport Layer (chi tiết hơn), IPv4, IPv6
+   - Công việc thực hiện: Tìm hiểu về Transport Layer (chi tiết hơn), IP (IPv4, IPv6)
    - Deadline: Chủ nhật 03/10/2026
 
 2. **Mục tiêu 2:** Tìm hiểu và triển khai QUIC
-   - Công việc thực hiện: Tìm hiểu chi tiết giao thức QUIC, demo server và client với Transport Layer dùng QUIC thay vì TCP
+   - Công việc thực hiện: Tìm hiểu về giao thức QUIC, demo server và client với Transport Layer dùng QUIC thay vì TCP, biết được Implementation sử dụng.
    - Deadline: Chủ nhật 03/10/2026
 
 ### 5. Điểm nổi bật muốn chia sẻ
