@@ -13,7 +13,7 @@
 
 ### 1. Cam kết tuần trước
 
-- Tìm hiểu về các giao thức ở Transport Layer bao gồm: OSI, TCP/IP, UDP. Hiểu được và trình bày được về các giao thức.
+- Tìm hiểu về các mô hình bao gồm: OSI, TCP/IP, UDP. Hiểu được và trình bày được về các giao thức TCO và UDP.
 
 - Tìm hiểu về Socket Programming: Hiểu và thực hành được  các hàm để lập trình socket.
 
@@ -33,6 +33,7 @@
 https://docs.google.com/presentation/d/1n3YdlglrR62uPwtIWSwN32DHt5DEej4SBGFi5b8EMug/edit?slide=id.h29013f29cf71a5a7_0_0#slide=id.h29013f29cf71a5a7_0_0
 
 - Kết quả 2: Demo server và client trao đổi dữ liệu
+https://github.com/luongduc-0712/ZerotoHeroWithQUIC/tree/main/src/Demo/W4
 
 
 
