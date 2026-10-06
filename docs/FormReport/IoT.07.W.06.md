@@ -1,13 +1,15 @@
 
 # FORM BÁO CÁO THEO TUẦN
 
-**ĐỊNH HƯỚNG ĐỀ TÀI:** IoT Test-bed
+**ĐỊNH HƯỚNG ĐỀ TÀI:** QUIC-SIMULATION
 
-**NHÓM:** IoT.xx
+**Người HƯỚNG DẪN:** Đặng Hữu Phúc
 
-**TUẦN:** 01
+**NHÓM:** IoT.07
 
-**NGƯỜI NỘP:** Tên các thành viên nhóm
+**TUẦN:** 
+
+**NGƯỜI NỘP:** Nguyễn Hoàng Anh - Nguyễn Lương Đức
 
 ---
 

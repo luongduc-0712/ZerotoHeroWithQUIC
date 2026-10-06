@@ -1,118 +1,1089 @@
-# ZerotoHeroWithQUIC
+﻿# ZerotoHeroWithQUIC
 
-Research, socket programming implementations, and performance benchmarks for the QUIC protocol.
-Đặt vấn đề
-Giả sử chúng ta có máy tính A và B kết nối mạng LAN, và chúng ta muốn gửi dưx liệu từ máy A sang máy B (với điều kiện chúng ta đã biết địa chỉ IP của cả 2 máy và 2 máy đã kết nối thành công)
-Bây giờ từ máy A, ta muốn chào hỏi máy B với nội dung “Hello”, vậy làm cách nào để máy B nhận được dữ liệu?
-Bơi vì, dữ liệu nằm ở tầng ứng dụng (user space), chúng ta cần gửi vào kenel space, sau đó kernel từ máy A-> kernel B. Nhưng làm sao để truyền tài được dữ liệu từ user space xuống kernel space và ngược lại? Trong kernel space dữ liệu sẽ được xử lý như thế nào? 
-Đó là 2 vấn đề cần giải đáp
-Các khái niệm cơ bản
-Các khái niệm và cách các giao thức hoạt động cơ bản: IP, Port, Protocol, Server - Client
-IP - địa chỉ
-IP như địa chỉ nhà, khi bên A biết đia chỉ của B thì có thể gửi dữ liệu từ A đến.
-Giả sử máy B có nhiều chương trình đang chạy, vậy làm thế nào có thể gửi dữ liệu đến đúng chương trình cần dữ liệu đó => Port
-Port
-Port là một số được sử dụng ở tầng transport, giúp phân biệt các điểm giao tiếp
-Để kết nối từ máy A đến máy B, chúng ta cần biết được địa chỉ IP của máy B và Port mà máy B sử dụng
-TCP
-Thiết lập kết nối: cần làm rõ
-Cung cấp byte stream: cần làm rõ
-Đảm bảo dữ liệu giao cho ứng dụng một cách tuần tự, đúng dữ liệu: cần làm rõ
-Cơ chế truyền lại khi cần: cần làm rõ
+> Research, socket programming implementations, and performance benchmarks for the QUIC protocol.
+
+---
+
+# 1. Đặt vấn đề
+
+Giả sử chúng ta có máy tính **A** và **B** kết nối mạng LAN, và chúng ta muốn gửi dữ liệu từ máy A sang máy B, với điều kiện chúng ta đã biết địa chỉ IP của cả hai máy và hai máy đã kết nối thành công.
+
+Bây giờ từ máy A, ta muốn chào hỏi máy B với nội dung:
+
+```text
+Hello
+```
+
+Vậy làm cách nào để máy B nhận được dữ liệu?
+
+Dữ liệu nằm ở **tầng ứng dụng (user space)**, chúng ta cần gửi vào **kernel space**, sau đó kernel từ máy A truyền dữ liệu đến kernel máy B.
+
+Nhưng làm sao để truyền dữ liệu từ user space xuống kernel space và ngược lại? Trong kernel space dữ liệu sẽ được xử lý như thế nào?
+
+Đó là hai vấn đề cần giải đáp:
+
+1. **Dữ liệu được đưa từ user space xuống kernel space như thế nào?**
+2. **Trong kernel space dữ liệu được xử lý và truyền từ máy A sang máy B như thế nào?**
+
+---
+
+# 2. Các khái niệm cơ bản
+
+Các khái niệm và cách các giao thức hoạt động cơ bản cần hiểu:
+
+- IP
+- Port
+- Protocol
+- Server - Client
+- TCP
+- UDP
+
+---
+
+## 2.1. IP - địa chỉ
+
+IP có thể được hình dung giống như **địa chỉ nhà**.
+
+Khi bên A biết địa chỉ của B thì A có thể xác định dữ liệu cần được gửi tới máy B.
+
+Tuy nhiên, giả sử máy B có nhiều chương trình đang chạy, vậy làm thế nào để dữ liệu được gửi đến **đúng chương trình cần dữ liệu đó**?
+
+=> Cần sử dụng **Port**.
+
+---
+
+## 2.2. Port
+
+Port là một số được sử dụng ở **tầng Transport**, giúp phân biệt các điểm giao tiếp.
+
+Để kết nối từ máy A đến máy B, chúng ta cần biết:
+
+- địa chỉ IP của máy B;
+- Port mà chương trình trên máy B sử dụng.
+
+Ví dụ:
+
+```text
+192.168.1.20:9090
+```
+
+Trong đó:
+
+```text
+192.168.1.20 -> IP
+9090         -> Port
+```
+
+---
+
+# 3. TCP
+
+TCP có các đặc điểm cần làm rõ:
+
+- **Thiết lập kết nối**: cần làm rõ.
+- **Cung cấp byte stream**: cần làm rõ.
+- **Đảm bảo dữ liệu giao cho ứng dụng một cách tuần tự, đúng dữ liệu**: cần làm rõ.
+- **Có cơ chế truyền lại khi cần**: cần làm rõ.
+
+---
+
+# 4. UDP
+
+UDP có các đặc điểm cần làm rõ:
+
+- **Không cần thiết lập kết nối**: cần làm rõ.
+- **Truyền theo datagram**: cần làm rõ.
+- **Không đảm bảo dữ liệu đến đích hay đến đúng thứ tự**: cần làm rõ.
+- **Không cung cấp cơ chế truyền lại đáng tin cậy như TCP**: cần làm rõ.
+
+---
+
+# 5. Client và Server
+
+## Server
+
+Server là chương trình cung cấp dịch vụ và chờ Client kết nối.
+
+## Client
+
+Client là chương trình chủ động kết nối với Server.
+
+Cần làm rõ thêm:
+
+- Server thực sự chờ ở đâu?
+- Client kết nối tới cái gì?
+- Một Server có thể phục vụ nhiều Client như thế nào?
+- Listening socket và connected socket có gì khác nhau?
+
+---
+
+# 6. Luồng dữ liệu tổng quát
+
+Tóm lại, dữ liệu sẽ đi như sau:
+
+```text
+Chương trình trên Client
+        |
+        v
+    Socket API
+        |
+        v
+Giao thức truyền tải
+        |
+        v
+ Kết nối giữa 2 máy
+        |
+        v
+Kernel trên máy Server
+        |
+        v
+    Socket API
+        |
+        v
+Chương trình trên Server
+```
+
+Hay tổng quát hơn:
+
+```text
+User space A
+    |
+    v
+Socket API
+    |
+    v
+Kernel A
+    |
+    v
+Network
+    |
+    v
+Kernel B
+    |
+    v
+Socket API
+    |
+    v
+User space B
+```
+
+---
+
+# 7. Vấn đề 1: Dữ liệu được đưa xuống kernel space như thế nào?
+
+## Cách xử lý
+
+Ta cần một giao diện để chương trình có thể gửi dữ liệu xuống kernel.
+
+Giao diện đó là:
+
+```text
+Socket API
+```
+
+---
+
+# 8. Socket, Socket API và Socket Programming
+
+## 8.1. Socket
+
+Socket là một **điểm cuối giao tiếp**.
+
+Có thể hình dung socket giống như một điểm giao nhận dữ liệu giữa chương trình và hệ điều hành.
+
+Socket là một tài nguyên do kernel tạo và quản lý.
+
+---
+
+## 8.2. Socket API
+
+Socket API là **giao diện** gồm các hàm mà chương trình sử dụng để thao tác với socket.
+
+Ví dụ:
+
+```c
+socket();
+bind();
+listen();
+accept();
+connect();
+send();
+recv();
+close();
+```
+
+Không nên hiểu socket là nơi “chứa” Socket API.
+
+Phân biệt:
+
+```text
+Socket
+-> tài nguyên / điểm giao tiếp do kernel quản lý
+
+Socket API
+-> tập hợp các hàm để chương trình thao tác với socket
+```
+
+---
+
+## 8.3. Socket Programming
+
+Socket Programming là công việc lập trình sử dụng Socket API để xây dựng chương trình giao tiếp mạng.
+
+Ví dụ:
+
+```text
+TCP Server
+TCP Client
+UDP Server
+UDP Client
+```
+
+Tóm lại:
+
+> Chương trình giao tiếp với hệ điều hành qua Socket API.
+
+---
+
+# 9. Các hàm Socket API cơ bản
+
+Các hàm chúng ta sẽ sử dụng:
+
+```c
+socket();   // tạo socket
+bind();     // gắn socket với địa chỉ cục bộ
+listen();   // chuẩn bị tiếp nhận kết nối
+accept();   // lấy một kết nối đã thiết lập
+connect();  // chủ động kết nối
+send();     // gửi dữ liệu
+recv();     // nhận dữ liệu
+close();    // đóng file descriptor
+```
+
+---
+
+# 10. Các thư viện cơ bản
+
+## `<sys/socket.h>`
+
+Chứa:
+
+```c
+socket()
+bind()
+listen()
+accept()
+connect()
+send()
+recv()
+
+struct sockaddr
+socklen_t
+```
+
+## `<netinet/in.h>`
+
+Chứa:
+
+```c
+struct sockaddr_in
+AF_INET
+AF_INET6
+INADDR_ANY
+htons()
+ntohs()
+htonl()
+ntohl()
+```
+
+## `<arpa/inet.h>`
+
+Chứa:
+
+```c
+inet_pton()
+inet_ntop()
+```
+
+`inet_ntop()` dùng để chuyển địa chỉ IP dạng nhị phân thành chuỗi dễ đọc.
+
+## `<unistd.h>`
+
+Chứa:
+
+```c
+close()
+```
+
+## `<stdio.h>`
+
+Chứa:
+
+```c
+printf()
+perror()
+getchar()
+```
+
+---
+
+# 11. File Descriptor
+
+## 11.1. Khái niệm
+
+File Descriptor là một **số nguyên không âm** mà tiến trình sử dụng để tham chiếu đến một tài nguyên I/O.
+
+Ví dụ, một chương trình sử dụng hai tài nguyên I/O khác nhau:
+
+- mở file;
+- tạo socket.
+
+Khi đó chương trình sử dụng FD để tham chiếu đến tài nguyên cần thao tác.
+
+Ví dụ:
+
+```c
+read(fd, buf, 100);
+```
+
+Có thể hiểu là:
+
+> Chương trình yêu cầu đọc tối đa 100 byte từ tài nguyên được tham chiếu bởi `fd`, sau đó ghi dữ liệu vào bộ nhớ đệm `buf`.
+
+---
+
+## 11.2. File Descriptor và Process
+
+Khi chạy program, kernel tạo **process** để thực thi chương trình.
+
+Mỗi process có một bảng File Descriptor riêng.
+
+Ví dụ:
+
+```text
+Process A
+
+FD 0 -> stdin
+FD 1 -> stdout
+FD 2 -> stderr
+FD 3 -> socket
+```
+
+Một process khác cũng có thể có:
+
+```text
+Process B
+
+FD 0 -> stdin
+FD 1 -> stdout
+FD 2 -> stderr
+FD 3 -> một tài nguyên khác
+```
+
+Như vậy:
+
+- Trong **cùng một process**, hai tài nguyên đang mở không sử dụng cùng một FD tại cùng thời điểm.
+- Trong **hai process khác nhau**, FD có thể trùng giá trị vì chúng thuộc hai bảng FD khác nhau.
+
+Kernel phân biệt các process thông qua **Process ID (PID)**.
+
+---
+
+## 11.3. Kiểm tra PID và FD trên Linux
+
+Tìm PID:
+
+```bash
+pgrep -a tên_chương_trình
+```
+
+Ví dụ:
+
+```bash
+pgrep -a tcp_server
+```
+
+Xem các File Descriptor của process:
+
+```bash
+ls -l /proc/PID/fd
+```
+
+Ví dụ:
+
+```bash
+ls -l /proc/12345/fd
+```
+
+---
+
+# 12. Hàm `socket()`
+
+## 12.1. Mục đích
+
+Hàm `socket()` dùng để:
+
+> Tạo socket và trả về File Descriptor dùng để tham chiếu đến socket đó.
+
+Hàm được khai báo trong:
+
+```c
+#include <sys/socket.h>
+```
+
+Nguyên mẫu:
+
+```c
+int socket(int domain, int type, int protocol);
+```
+
+---
+
+## 12.2. Tham số `domain`
+
+`domain` xác định họ địa chỉ mà socket sử dụng.
+
+### `AF_INET`
+
+```c
+AF_INET
+```
+
+Xác định socket sử dụng IPv4.
+
+### `AF_INET6`
+
+```c
+AF_INET6
+```
+
+Xác định socket sử dụng IPv6.
+
+### `AF_UNIX`
+
+```c
+AF_UNIX
+```
+
+Dùng để giao tiếp nội bộ trên cùng một máy.
+
+---
+
+## 12.3. Tham số `type`
+
+### `SOCK_STREAM`
+
+```c
+SOCK_STREAM
+```
+
+Luồng byte, thường sử dụng với TCP.
+
+### `SOCK_DGRAM`
+
+```c
+SOCK_DGRAM
+```
+
+Datagram, thường sử dụng với UDP.
+
+---
+
+## 12.4. Tham số `protocol`
+
+Tham số `protocol` xác định giao thức cần sử dụng.
+
+Có thể đặt:
+
+```c
+0
+```
+
+Khi đó kernel tự chọn giao thức phù hợp với `domain` và `type`.
+
+Hoặc có thể chỉ rõ:
+
+```c
+IPPROTO_TCP
+```
+
+hoặc:
+
+```c
+IPPROTO_UDP
+```
+
+Ví dụ:
+
+```c
+socket(AF_INET, SOCK_STREAM, 0);
+```
+
+hoặc:
+
+```c
+socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+```
+
+### Kết luận
+
+Các tham số:
+
+```text
+domain
+type
+protocol
+```
+
+mô tả **socket mà chúng ta muốn tạo**.
+
+Sau đó kernel tạo socket tương ứng và trả về một File Descriptor cho process.
+
+---
+
+# 13. Kernel quản lý File Descriptor
+
+Với mỗi process sẽ có một bảng tham chiếu riêng.
+
+Ví dụ:
+
+```text
+Process A
+PID = 1000
+
+FD 3
+ |
+ v
+Socket A
+```
+
+và:
+
+```text
+Process B
+PID = 2000
+
+FD 3
+ |
+ v
+Socket B
+```
+
+Hai process đều có thể có FD bằng `3`, nhưng chúng thuộc hai bảng FD khác nhau.
+
+Kernel biết chương trình đang thao tác trong context của process nào, vì vậy kernel xác định được chính xác FD đó đang tham chiếu tới tài nguyên nào.
+
+---
+
+# 14. Hàm `bind()`
+
+Giả sử máy A có `IP1` và nhiều Port khác nhau.
+
+Chúng ta muốn dùng `Port1` để giao tiếp với máy khác.
+
+Khi đó chúng ta cần **gắn địa chỉ IP và Port của máy A cho socket đang chạy trên máy A**.
+
+Đó là nhiệm vụ của:
+
+```c
+bind()
+```
+
+---
+
+## 14.1. Địa chỉ cục bộ là gì?
+
+Địa chỉ cục bộ là:
+
+```text
+IP của chính máy đang chạy chương trình
++
+Port mà chương trình muốn sử dụng
+```
+
+Ví dụ:
+
+```text
+IP   = 192.168.1.10
+Port = 9090
+```
+
+Địa chỉ cục bộ:
+
+```text
+192.168.1.10:9090
+```
+
+---
+
+## 14.2. Cấu trúc hàm `bind()`
+
+```c
+int bind(
+    int sockfd,
+    const struct sockaddr *addr,
+    socklen_t addrlen
+);
+```
+
+Trong đó:
+
+```text
+sockfd
+-> FD của socket cần gắn địa chỉ
+
+addr
+-> địa chỉ vùng nhớ chứa thông tin địa chỉ cục bộ
+
+addrlen
+-> kích thước vùng nhớ chứa cấu trúc địa chỉ
+```
+
+---
+
+# 15. `struct sockaddr_in`
+
+Với IPv4, chúng ta sử dụng:
+
+```c
+struct sockaddr_in
+```
+
+Cấu trúc này có các trường quan trọng:
+
+```text
+sin_family -> họ địa chỉ IPv4
+sin_port   -> Port cục bộ
+sin_addr   -> địa chỉ IP cục bộ
+```
+
+Ví dụ:
+
+```c
+struct sockaddr_in server_addr = {0};
+
+server_addr.sin_family = AF_INET;
+server_addr.sin_port = htons(9090);
+server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+```
+
+---
+
+# 16. Network Byte Order
+
+Port là một số nguyên 16 bit.
+
+Trong máy tính có hai cách sắp xếp byte phổ biến:
+
+```text
+Big-endian
+Little-endian
+```
+
+Trong network, quy ước sử dụng:
+
+```text
+Big-endian
+```
+
+Vì vậy khi đưa giá trị từ host vào cấu trúc dùng cho network, cần chuyển đổi về network byte order.
+
+---
+
+## 16.1. `htons()`
+
+```c
+htons()
+```
+
+Dùng với giá trị 16 bit, ví dụ Port.
+
+```c
+server_addr.sin_port = htons(9090);
+```
+
+Có thể nhớ:
+
+```text
+h -> host
+to
+n -> network
+s -> short
+```
+
+---
+
+## 16.2. `htonl()`
+
+```c
+htonl()
+```
+
+Dùng với giá trị 32 bit.
+
+Ví dụ:
+
+```c
+server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+```
+
+Có thể nhớ:
+
+```text
+h -> host
+to
+n -> network
+l -> long
+```
+
+---
+
+# 17. Hàm `listen()`
+
+Hàm `listen()` nằm trong:
+
+```c
+#include <sys/socket.h>
+```
+
+Nguyên mẫu:
+
+```c
+int listen(int sockfd, int backlog);
+```
+
+Khi Server gọi:
+
+```c
+listen()
+```
+
+Server yêu cầu kernel:
+
+1. Chuyển socket sang trạng thái lắng nghe kết nối TCP.
+2. Thiết lập giới hạn hàng đợi kết nối.
+
+---
+
+## 17.1. Điều gì xảy ra khi Client gọi `connect()`?
+
+Khi Client gọi:
+
+```c
+connect()
+```
+
+kernel bên Client gửi `SYN` đến Server.
+
+Sau đó:
+
+```text
+Client kernel                  Server kernel
+
+     SYN
+      ----------------------->
+
+                  SYN + ACK
+      <-----------------------
+
+     ACK
+      ----------------------->
+```
+
+Sau khi handshake hoàn thành, kernel phía Server đã có một kết nối TCP được thiết lập.
+
+Tuy nhiên, chương trình Server chưa nhất thiết đã gọi:
+
+```c
+accept()
+```
+
+để lấy kết nối đó ra xử lý.
+
+Client có thể gửi dữ liệu sau khi kết nối TCP được thiết lập. Kernel phía Server có thể nhận dữ liệu và giữ trong buffer trước khi chương trình Server gọi `accept()` để tiếp nhận connected socket.
+
+---
+
+## 17.2. `backlog`
+
+Tham số:
+
+```c
+backlog
+```
+
+xác định giới hạn hàng đợi các kết nối TCP đã thiết lập thành công nhưng chưa được chương trình Server tiếp nhận bằng:
+
+```c
+accept()
+```
+
+Ví dụ:
+
+```c
+listen(server_fd, 10);
+```
+
+---
+
+# 18. Hàm `accept()`
+
+Hàm `accept()` được khai báo trong:
+
+```c
+#include <sys/socket.h>
+```
+
+Nguyên mẫu:
+
+```c
+int accept(
+    int sockfd,
+    struct sockaddr *addr,
+    socklen_t *addrlen
+);
+```
+
+---
+
+## 18.1. Mục đích của `accept()`
+
+Khi chương trình Server gọi:
+
+```c
+accept()
+```
+
+chương trình yêu cầu kernel lấy một kết nối đã được thiết lập trên listening socket.
+
+Nếu thành công, `accept()` trả về File Descriptor của một **connected socket** mới.
+
+Ví dụ:
+
+```text
+server_fd = 3
+client_fd = 4
+```
+
+Trong đó:
+
+```text
+server_fd
+-> listening socket
+
+client_fd
+-> connected socket dùng để trao đổi dữ liệu với Client
+```
+
+---
+
+## 18.2. Kernel đã biết thông tin Client từ đâu?
+
+Trước khi chương trình gọi `accept()`, kernel đã tham gia quá trình TCP handshake.
+
+Do đó kernel đã có các thông tin như:
+
+```text
+Client IP
+Client Port
+```
+
+Khi gọi `accept()`, chương trình có thể yêu cầu kernel sao chép các thông tin này ra vùng nhớ của Server.
+
+---
+
+## 18.3. Tham số `addr`
+
+```c
+struct sockaddr *addr
+```
+
+Tham số `addr` sử dụng **con trỏ** để kernel có thể ghi thông tin địa chỉ Client vào vùng nhớ mà chương trình đã chuẩn bị.
+
+Ví dụ chương trình tạo:
+
+```c
+struct sockaddr_in client_addr;
+```
+
+Sau đó truyền:
+
+```c
+(struct sockaddr *)&client_addr
+```
+
+vào `accept()`.
+
+Nếu không sử dụng con trỏ thì kernel không thể ghi IP và Port của Client vào chính vùng nhớ mà chương trình Server đã chuẩn bị.
+
+---
+
+## 18.4. Tham số `addrlen`
+
+```c
+socklen_t *addrlen
+```
+
+`addrlen` cũng sử dụng con trỏ vì kernel cần thực hiện hai việc:
+
+### Trước khi `accept()` chạy
+
+Kernel cần đọc kích thước vùng nhớ mà chương trình cung cấp.
+
+Ví dụ:
+
+```c
+socklen_t client_len = sizeof(client_addr);
+```
+
+### Sau khi `accept()` chạy
+
+Kernel cập nhật lại biến này bằng kích thước địa chỉ thực tế đã được ghi.
+
+Vì vậy phải truyền:
+
+```c
+&client_len
+```
+
+Ví dụ:
+
+```c
+int client_fd = accept(
+    server_fd,
+    (struct sockaddr *)&client_addr,
+    &client_len
+);
+```
+
+---
+
+# 19. Tiến trình TCP Server hiện tại
+
+Từ những kiến thức đã học, có thể hình dung TCP Server theo trình tự:
+
+```text
+socket()
+    |
+    v
+Tạo socket + FD
+
+bind()
+    |
+    v
+Gắn socket với IP + Port cục bộ
+
+listen()
+    |
+    v
+Chuyển socket thành listening socket
+
+accept()
+    |
+    v
+Lấy một kết nối TCP đã được thiết lập
+và nhận connected socket FD
+
+recv() / send()
+    |
+    v
+Nhận và gửi dữ liệu
+
+close()
+    |
+    v
+Đóng FD
+```
+
+---
+
+# 20. TCP Client hiện tại
+
+Phía Client có thể hình dung:
+
+```text
+socket()
+    |
+    v
+Tạo socket
+
+connect()
+    |
+    v
+Chủ động yêu cầu thiết lập kết nối TCP tới Server
+
+send() / recv()
+    |
+    v
+Gửi và nhận dữ liệu
+
+close()
+    |
+    v
+Đóng socket
+```
+
+---
+
+# 21. Các phần cần tiếp tục làm rõ
+
+## TCP
+
+- Thiết lập kết nối thực sự nghĩa là gì?
+- `connect()` làm gì với socket?
+- Byte stream là gì?
+- `send()` thực sự đưa dữ liệu đi đâu?
+- `recv()` thực sự lấy dữ liệu từ đâu?
+- TCP đảm bảo thứ tự như thế nào?
+- TCP truyền lại dữ liệu như thế nào?
+- Tại sao một `send()` không tương ứng với một `recv()`?
+
+## UDP
+
+- Không thiết lập kết nối nghĩa là gì?
+- Datagram là gì?
+- `sendto()` và `recvfrom()` hoạt động như thế nào?
+- UDP socket khác TCP socket ở đâu?
+
+## QUIC
+
+Sau khi hiểu TCP và UDP socket programming:
+
+```text
+Application
+    |
+    v
+QUIC
+    |
+    v
 UDP
-Không cần thiết lập kết nối: cần làm rõ
-Truyền theo datagram: cần làm rõ
-Không đảm bảo dữ liệu đến đúng nơi hay đúng thứ tự: cần làm rõ
-Không cung cấp cơ chế truyền lại đáng tin cậy: cần làm rõ
-Client và Server
-Server là chương trình cung cấp dịch vụ và chờ Client kết nối
-Client là chương trình chủ động kết nối với Server
-Cần làm rõ hơn nữa
+    |
+    v
+IP
+```
 
-⇒ Tóm lại dữ liệu sẽ đi như sau: Chương trình trên Client -> Socket API -> Giao thức truyền tải -> Kết nối giữa 2 máy -> kernel trên máy tính -> Socket API -> Chương trình trên Server
- 
+Cần tiếp tục tìm hiểu:
 
+- QUIC sử dụng UDP socket như thế nào?
+- QUIC connection được tạo ra như thế nào?
+- QUIC handshake hoạt động thế nào?
+- QUIC stream là gì?
+- QUIC tự xử lý ACK, retransmission và congestion control như thế nào?
 
+# 22. QUIC
+UDP cung cấp cho QUIC:
+- port nguồn
+- port đích
+- checksum
+- truyền datagram
+- giao diện socket trên hệ điều hành
 
+Còn lại QUIC sẽ xử lý phía trên, bao gồm:
+- Connection
+- Stream
+- Reliability
+- ACK
+- Retransmission
+- Congestion Control
+- TLS encryption
 
-
-
-
-
-Vấn đề 1: Dữ liệu được đưa xuống kernel space như thế nào?
-Cách xử lý: tạo một giao diện để gửi dữ liệu, đó là socket API
-Khái niệm: socket là một điểm cuối giao tiếp, giống như shipper (giao hàng tại 2 điểm đầu, cuối). 
-Cần hiểu rõ: 
-socket: là điểm giao tiếp nằm ở giữa user và kernel
-socket API: là giao diện, chương trình chứa các hàm để xử lý dữ liệu
-programming socket: là công việc lập trình các API
-làm rõ: socket có chứa socket API không?
-Chúng ta sẽ sử dụng các hàm như sau:
-socket(): tạo socket
-bind(): gắn socket với địa chỉ cục bộ (làm rõ: địa chỉ cục bộ)
-listen(): chuẩn bị tiếp nhận kết nối
-accept(): lấy một kết nối đã thiết lập
-connect(): chủ động kết nối
-send(): gửi dữ liệu
-recv(): nhận dữ liệu
-close(): đóng file descriptor
-
-	=> Tóm lại chương trình giao tiếp với hệ điều hành qua socket API
-
-Thư viện cơ bản
-<sys/socket.h>: socket(), bind(), listen(), accept(), struct sockaddr và socklen_t
-<netinet/in.h>: sockaddr_in, AF_INET, INADDR_ANY, htons() và ntohs()
-<arpa/inet.h>: inet_ntop() để chuyển địa chỉ IP dạng nhị phân thành chuỗi dễ đọc
-<unistd.h>: close()
-<stdio.h>: printf(), perror() và getchar()
-Hàm socket(): tạo socket và file descriptor 
-FIle desciptor: là một số nguyên không âm mà tiến trình sử dụng để tham chiếu đến một tài nguyên I/O.
-Chẳng hạn: một chương trình sử dụng 2 tài nguyên I/O khác nhau, ví dụ như mở file và tạo socket, như vậy ta sẽ có 1 tham số fd để chương trình có thể tham chiếu vào tài nguyên cần thiết. Ví dụ: read(fd, buf, 100); tức là chương trình yêu cầu đọc tối đa 100 byte từ tài nguyên được tham chiếu bởi fd, ghi vào bộ nhớ đệm buf
-Khi chạy program, kernel tạo process để thực thi chương trình, mỗi process có một fd riêng
-
-Hàm socket(): được khai báo trong thư viện <sys/socket.h>
-Câu lệnh: int socket(int domain, int type, int protocol)
-Tham số domain: 
-AF_INET xác định địa chỉ mà mà IPv4 sử dụng
-AF_INET xác định địa chỉ mà IPv6 sử dụng
-AF_UNIX giao tiếp nội bộ trên cùng 1 máy
-Tham số type: 
-		SOCK_STREAM: luồng byte, thường sử dụng TCP
-		SOCK_DIAGRAM: datagra, thường sử dụng UDP
-Tham số Protocol: xác định giao thức cần được sử dụng, khi đặt bằng 0, kernel tự chọn giao thức phù hợp với domain và type. Hoặc có thể ghi rằng: IPPROTOCOL_TCP/UDP.
-	⇒ Các tham số trên chỉ mô tả socket chúng ta muốn tạo
-Trình bày về kernel xác nhận các số tham chiếu
-Với mỗi process sẽ có bảng tham chiếu riêng, vì vậy, nếu trong cùng 1 tiến trình sẽ không cùng giá trị File Descriptors. Trong trường hợp nhận 2 process, các giá trị File Descriptors có thể có giá trị khác nhau, nhưng khác bảng tham chiếu.
-Cách Kernel xác định được bảng tham chiếu ứng với process thông qua Process ID (PID).
-Có thể kiểm tra PID của mỗi process: 
-pgrep  -a “tên chương trình”: tìm PID
-ls -l /proc/”PID”/fd: Xem bảng mà kernel cung cấp qua hệ thống
-Hàm bind(): Giả sử máy A có IP1, Port1, tất nhiên nó sẽ có nhiều Port nữa, chúng ta muốn dùng Port1 để kết nối với máy khác. Vậy chúng ta gắn địa chỉ IP và Port của máy A cho socket đang chạy ở máy A.
-Cấu trúc hàm bind():
-      int bind(
-	int sockfd,
-	const struct sockaddr *addr,
-	socklen_t addrlen
-      );
-Như vậy với struct chúng ta sẽ mang các trường dữ liệu bao gồm: họ địa chỉ IPv4, Port cục bộ và địa chỉ IP cục bộ. Chúng ta khai báo như sau:
-       struct sockaddr_in sockaddr(
-	sin_family: họ địa chỉ IPv4
-	sin_port: Port cục bộ
-	sin_addr: IP cục bộ
-       );
-⇒ Lưu ý: với địa chỉ Port, trong C chúng ta đang có là một số nguyên 16 bit, có 2 cách sắp xếp lưu giá trị trong bộ nhớ là big-endian và little-endian. Đó là trên máy tính, còn với network, quy ước sử dụng big-endian. Để phù hợp, chúng ta luôn cần htons() hoặc htonl() với 32 bits như IP.
-Hàm listen(): trong như viện #include <sys/socket.h>
-Câu lệnh: int listen(int socketfd, int backlog);
-Khi server gọi hàm listen(),  nó yêu cầu kernel chuyển socket sang trạng thái lắng nghe các kết nối và thiết lập giới hạn hàng đơi kết nối, khi client gọi hàm connection(), kernel bên client gửi gói SYN đến server, sau đó kernel của server gửi trả lại gói SYN-ACK, client gửi lại ACK sau khi nhận được SYN-ACK của server.
-Tuy nhiên client có thể gửi dữ liệu cho kernel bên server, dù socket bên server có thể chưa nhận nếu chưa gọi hàm accept().
-backlog: xác định giới hạn hàng đợi các kết nối TCP đã thiết lập thành công nhưng chưa được chương trình tiếp nhận bằng accept()
-Hàm accept(): khai báo trong thư viện #include <sys/socket.h>
-Nguyên mẫu: 
-                 int accept(
-		int sockfd,
-		struct sockaddr *addr,
-		socklen_t *addr_len
-     );
-Khi sử dụng hàm accept(), socket yêu cầu kernel lấy một kết nối đã được thiết lập trên listening socket và trả về FD của connected socket. Trước đó kernel đã có thông tin của IP và Port của client, accept() sao chép thông tin này và ghi vào vùng nhớ server.
-Tham số addr sử dụng con trỏ để ghi thông tin địa chỉ Client vào vùng nhớ mà chương trình đã chuẩn bị. Nếu không dùng con trỏ thì không thể ghi được IP và Port vào vùng nhớ.
-Tham số addrlen dùng con trỏ vì kernel cần đọc kích thước vùng nhớ ban đầu và cập nhật biến này bằng kích thước địa chỉ thực tế.
