@@ -1086,4 +1086,133 @@ Còn lại QUIC sẽ xử lý phía trên, bao gồm:
 - Retransmission
 - Congestion Control
 - TLS encryption
+## 1. Cơ chế hoạt động
+QUIC lấy dữ liệu từ Applcation, QUIC tổ chức dữ liệu thành stream (giữ lại trình tự cho dữ liệu).
+```text
+=> Câu hỏi: QUIC tổ chức dữ liệu thành stream bằng cách nào?
+```
+Sau đó, Stream dât được đặt vào Frame nhằm mô tả được đây là dữ liệu của Stream nào, nằm ở vị trí nào trong Stream.
+```text
+Đơn giản hóa
+    Stream ID 
+    Offset
+    Length
+    Data
+```
+Frame được đặt vào QUIC packet
+```text
+QUIC Packet
+┌─────────────────────────────┐
+│ Header                      │
+│                             │
+│ Connection ID = ABC         │
+│ Packet Number = 10          │
+├─────────────────────────────┤
+│ Payload                     │
+│                             │
+│ ┌─────────────────────────┐ │
+│ │ STREAM Frame            │ │
+│ │ Stream ID = 0           │ │
+│ │ Offset = 0              │ │
+│ │ Data = "Hello"          │ │
+│ └─────────────────────────┘ │
+└─────────────────────────────┘
+```
+## 2. ACK
+ACK là gói được gửi như dữ liệu từ Server nhằm giúp cho Client nhận biết gói tin đã được gửi, trong trường hợp không nhận được gói ACK, Client không trực tiếp gửi lại ngay mà còn dựa vào Packiet Number + ACK + RTT + timer + Loss Detection
+Có 2 cơ chế xác định gói ACK có mất hay không
+- Packet Threshold: hiểu đơn giản là các packet có Packet Number lớn hơn nó đã được ACK đủ xa, QUIC sẽ coi là lost packet đó
+- Time Threshold: Trong trường hợp đằng packet không nhận được gói ACK là quá ít hoặc không còn packet, trong lúc này áp dụng phương pháp: nếu packet đã chờ lâu hơn đáng kể so với thời gian mạng bình thường, nó có khả năng đã mất
+- Khi phát hiện packet mất, QUIC sẽ lấy STREAM data chưa được ACK đưa vào một packet mới
+```text
+                 SEND PACKET
+                      │
+                      ↓
+               lưu PN + sent_time
+                      │
+                      ↓
+                  chờ ACK
+                      │
+          ┌───────────┴────────────┐
+          │                        │
+       ACK tới                chưa có ACK
+          │                        │
+          ↓                        ↓
+   parse ACK ranges           PTO timer
+          │                        │
+          ↓                        ↓
+  mark packet ACKED          timer expired?
+          │                        │
+          ↓                        ↓
+     update RTT                  send probe
+          │
+          ↓
+ kiểm tra các packet
+ chưa được ACK
+          │
+     ┌────┴────┐
+     │         │
+packet      time
+threshold   threshold
+     │         │
+     └────┬────┘
+          ↓
+       LOST?
+          │
+          ↓
+        YES
+          │
+          ↓
+ recovery frame/data
+          │
+          ↓
+ packet mới PN mới
+```
+## 3. Tổng quan
+```text
+                    APPLICATION
+                         │
+                         ↓
+                      STREAM
+                         │
+                         ↓
+                       FRAME
+                         │
+                         ↓
+                    QUIC PACKET
+                    /          \
+                  CID           PN
+                   │             │
+                   │             ↓
+                   │            ACK
+                   │             │
+                   │             ↓
+                   │            RTT
+                   │             │
+                   │             ↓
+                   │      LOSS DETECTION
+                   │             │
+                   │             ↓
+                   │         RECOVERY
+                   │
+                   ↓
+          CONNECTION MANAGEMENT
 
+                         │
+                         ↓
+                        UDP
+                         ↓
+                         IP
+```
+## 4. Lộ trình thực hiện
+Packet format + serialization/deserialization
+Thêm Packet Number
+Thêm STREAM Frame
+Ghép vào UDP sendto()/recvfrom()
+Server lưu received packet numbers
+Implement ACK Frame
+Client có sent_packet[]
+Parse ACK → ACKED
+RTT measurement
+Packet/time threshold → LOST
+PTO timer → probe packet
