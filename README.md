@@ -1205,14 +1205,41 @@ threshold   threshold
                          IP
 ```
 ## 4. Lộ trình thực hiện
-Packet format + serialization/deserialization
-Thêm Packet Number
-Thêm STREAM Frame
-Ghép vào UDP sendto()/recvfrom()
-Server lưu received packet numbers
-Implement ACK Frame
-Client có sent_packet[]
-Parse ACK → ACKED
-RTT measurement
-Packet/time threshold → LOST
-PTO timer → probe packet
+Xây dựng một QUIC v1 tối giản dựa trên các tài liệu chính:
+- RFC 9000: QUIC Transport
+- RFC 9001: QUIC TLS
+- RFC 9002: Loss Detection & Congestion Control
+### Các bước thực hiện:
+
+| Giai đoạn | Nhiệm vụ chính | Nội dung thực hành | Kết quả |
+|---|---|---|---|
+| 1 | QUIC Packet | Tạo, Serialize, parse các QUIC packet |
+| 2 | QUIC Frame | Implement PING, ACK, CRYPTO, STREAM, CONNECTION_CLOSE| 
+| 3 | Connection Management | Connection ID, trạng thái, packet number space, connection timeout| 
+| 4 | TLS 1.3 Integration | Tích hợp thư viện TLS, QUIC CRYPTO frame, packet protection|
+| 5 | QUIC Handshake | Thiết lập kết nối Client - Server thực tế
+| 6 | QUIC Stream | Gửi, nhận dữ liệu, quản lý stram và flow control| 
+| 7 | ACK & Loss Recovery | RTT, ACK ranges, loss detection, PTO, retransmission|
+| 8 | congestion Control | Congestion windown, slow strat, congestion advoidance|
+| 9 | Testing | Kiểm thử truyền dữ liệu, mất gói và khả năng tương thích|
+
+### Cách sắp xếp của QUIC
+```text
+UDP Datagram
+│
+└── QUIC Packet
+    │
+    ├── QUIC Header
+    │
+    └── Protected Payload
+        │
+        ├── STREAM Frame
+        │   ├── Frame Type
+        │   ├── Stream ID
+        │   ├── Offset (nếu có)
+        │   ├── Length (nếu có)
+        │   └── Data: "Hello"
+        │
+        └── ...
+```
+#### a. 
