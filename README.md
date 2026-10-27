@@ -1242,4 +1242,370 @@ UDP Datagram
         │
         └── ...
 ```
-#### a. 
+```text
+Ứng dụng (examples/client.c, server.c)
+        │  dùng API công khai
+        ▼
+   quic.h                  ← "cửa ngõ" của thư viện
+        │
+        ▼
+   quic_connection         ← quản lý một kết nối (trạng thái, Connection ID)
+        │
+   ┌────┼──────────────┬──────────────┐
+   ▼    ▼              ▼              ▼
+quic_stream     quic_recovery   quic_tls / quic_crypto
+(luồng dữ liệu) (phát hiện mất  (bắt tay, mã hóa)
+                 gói, gửi lại)
+                     │
+                     ▼
+              quic_congestion  (điều tiết tốc độ gửi)
+        │
+        ▼
+   quic_frame              ← các "thông điệp" nằm trong packet
+        │
+        ▼
+   quic_packet             ← đóng gói, đánh số packet
+        │
+        ▼
+   quic_varint             ← công cụ nền: mã hóa số nguyên
+        │
+        ▼
+      UDP socket
+```
+## Phân biệt: QUIC Stream, QUIC Frame, QUIC Packet.
+### QUIC Stream: Luồng dữ liệu ứng dụng. 
+- Một connection có thể có nhiều Stream.
+- STREAM thường cung cấp truyền dữ liệu tin cậy
+- Dữ liệu được đưa tới dứng dụng theo đúng thứ tự trong Stream
+- Mỗi STREAM đều có không gian vị trí byte (offset) riêng
+- Các STREAM có thể hoạt động tương đối độc lập.
+- Có 2 loại STREAM:
+    - Bidirectional Stream: Cả Client và Server đều có thể gửi dữ liệu trên cùng 1 Stream.
+    - Unidirectional Stream: Chỉ một phía gửi dữ liệu trên Stream đó.
+- Tuy nhiên, QUIC Stream vẫn là luồng byte nên không tự bảo toàn ranh giới thông điệp. 
+### QUIC Frame: Đơn vị dữ liệu bên trong QUIC Packet
+- QUIC cần biểu diễn dữ liệu trong STREAM dưới dạng có cấu trúc để phía nhận có thể phân biệt bao gồm: dữ liệu thuộc Stream nào, nằm ở vị trí byte nào trong Stream, có bao nhiê byte, Stream đã kết thúc chưa?
+- Một Stream có cấu trúc khái quát:
+```Text
++---------------------+
+|Frame Type           |
++---------------------+
+|Stream ID            |
++---------------------+
+|Offset (option)      |
++---------------------+
+|Length (option)      |
++---------------------+
+|Stream Data          |
++---------------------+
+```
+- Ngoài STREAM Frame, chúng ta còn:
+    - ACK: Xác nhận những QUIC Packet đã nhận
+    - CRYPRO: Mang dữ liệu phục vụ TLS Handshake
+    - PING: Tạo gói cần đuọc xác nhận, ví dụ kiểm tra đường truyền
+    - MAX_DATA: Thông báo giới hạn dữ liệu được phép gửi trên kết nối
+    - MAX_STREAM_DATA: Thông báo giới hạn dữ liệu trên một Stream
+    - CONNECTION_CLOSE: Thông báo đóng kết nối
+    - PADDING: Bổ sung byte đệm
+### QUIC Packet: Gói tin của QUIC
+Sau khi tạo STREAM Frame, QUIC cần gửi Frame đó qua mạng. Nó sẽ đặt Frame vào một QUIC Packet với cấu trúc khai quát:
+```Text
+Một Packet có thể có nhiều Frame.
++-----------------------+
+|     QUIC Header       |
++-----------------------+
+|     QUIC Payload      |
+|   +----------------+  |
+|   |Stream Frame    |  |
+|   +----------------+  |
+|   |ACK Frame       |  |
+|   +----------------+  |
+|   |PADDING Frame   |  |
+|   +----------------+  |
+|                       |
++-----------------------+
+```
+- QUIC Header có thể chứa:
+    - **Destination Connection ID (DCID):** Định danh kết nối ở phía nhận
+    - **Source Connection ID (SCID):** Định danh kết nối ở phía gửi, đối với những Packet có trường này
+    - **Packet Number:** Số thứ tự gói tin trong không gian tương ứng
+    - **Packet Type:** Loại packet được thể hiện khác nhau giữa Long Header và Short Header
+    - **Version:** Phiên bản QUIC, đối với Long Header
+## Cách đưa QUIC Packer vào UDP Datagram
+```text
++-------------------------------------------------------+
+|                      IP PACKET                        |
+|                                                       |
+|  +-------------------------------------------------+  |
+|  |                  IP Header                      |  |
+|  +-------------------------------------------------+  |
+|  |                 UDP Datagram                    |  |
+|  |                                                 |  |
+|  |  +-------------------------------------------+  |  |
+|  |  | UDP Header                                |  |  |
+|  |  +-------------------------------------------+  |  |
+|  |  | QUIC Packet                               |  |  |
+|  |  |                                           |  |  |
+|  |  | +---------------------------------------+ |  |  |
+|  |  | | QUIC Header                           | |  |  |
+|  |  | +---------------------------------------+ |  |  |
+|  |  | | Protected QUIC Payload                | |  |  |
+|  |  | |                                       | |  |  |
+|  |  | |   STREAM Frame                        | |  |  |
+|  |  | |   ACK Frame                           | |  |  |
+|  |  | |                                       | |  |  |
+|  |  | +---------------------------------------+ |  |  |
+|  |  +-------------------------------------------+  |  |
+|  +-------------------------------------------------+  |
++-------------------------------------------------------+
+```
+## Thiết lập kết nối
+Xét trường hợp thông thường: không sử dụng 0-RTT và không co Retry
+### Các loại Packet của QUIC trong thiết lập kết nối
+- Hai nhóm Header quan trọng: 
+    - Long Header: Được sử dụng cho các loại Packet phục vụ thiết lập kết nối như Initial, Handshake, 0-RTT và Retry.
+    - Short Header: Chủ yếu được sử dụng để truyền dữ liệu bằng 1-RTT khi đã có khóa thích hợp
+- Các loại Packet cần biết:
+    - Initial: Khởi đầu kết nối, mang dữ liệu TLS Handshake ban đầu.
+    - Handshake: Tiếp tục trao đổi dữ liệu TLS Handshake
+    - 0-RTT: Cho phép gửi dữ liệu ứng dụng sớm trong một số trường hợp kết nối lại
+    - 1-RTT: Truyền dữ liệu sau khi các khóa 1-RTT đã sẵn sàng
+### Luồng QUIC Handshake
+```text
+Sơ đồ cơ bản
+client.c                                  server.c
+
+   |                                          |
+   | ---------- Initial Packet ------------>  |
+   |             ClientHello                  |
+   |                                          |
+   | <--------- Initial Packet -------------- |
+   | <-------- Handshake Packet ------------- |
+   |             ServerHello                  |
+   |             TLS Handshake data           |
+   |                                          |
+   | ---------- Handshake Packet ---------->  |
+   |             Client Finished              |
+   |                                          |
+   | <---------- 1-RTT Packet --------------- |
+   |             HANDSHAKE_DONE               |
+   |                                          |
+   |           QUIC CONNECTION                |
+   |                                          |
+   | ---------- STREAM Frame -------------->  |
+   |             Hello Server!                |
+   |                                          |
+   | <--------- STREAM Frame ---------------- |
+   |             Hello Client!                |
+   |                                          |
+```
+**Giai đoạn 1: Client gửi Initial Packet**
+- CLient gửi một QUIC Initial Packet, mang TLS ClientHello trong CRYPTO Frame.
+**Giai đoạn 2: Server xử lý Initial Packet**
+- Ở đây, Server nhận UDP Datagram bằng recvfrom(), sau đó ngtcp2 sẽ xử lý Packet. Thư viện ngtcp2 sẽ phân tích:
+    - Phần tích QUIC Header
+    - Xác định kết nối tương ứng
+    - Xử lý bảo vệ và giải mã gói
+    - Phân tích các QUIC Frame
+    - Chuyển dữ liệu CRYPTO sang phần xử lý TLS
+    - Phối hợp với GnuTLS để tiếp tục Handshake
+**Giai đoạn 3: Hai phía thiết lập khóa**
+Client và Server trao đổi những thông tin cần thiết để: 
+- Thỏa thuận thuật toán bảo mật
+- Xác thực Server thông qua chứng chỉ
+- Tạo các khóa dùng để bảo vệ dữ liệu
+QUIC sử dụng các khóa khác nhau cho từng cấp độ bảo vệ gói, bao gồm Initial, Handshake và 1-RTT
+**Giai đóạn 4: Truyền dữ liệu ứng dụng**
+Khi có khóa 1-RTT và trạng thái kết nối cho phép, ứng dụng có thể bắt đầu trao đổi dữ liệu qua QUIC Stream.
+## Cách QUIC nhận dữ liệu ở Server
+```text
+                       SERVER
+
+                       Network
+                          |
+                          v
+                     UDP Datagram
+                          |
+                          v
+                     recvfrom()
+                          |
+                          v
+                     UDP Buffer
+                          |
+                          v
+                ngtcp2_conn_read_pkt()
+                          |
+             +------------+------------+
+             |            |            |
+             v            v            v
+          Header        Decrypt       Frames
+          Parsing       Packet        Parsing
+                                       |
+                              +--------+--------+
+                              |                 |
+                              v                 v
+                         CRYPTO Frame      STREAM Frame
+                              |                 |
+                              v                 v
+                            TLS            Stream Data
+                              |                 |
+                              v                 v
+                          Handshake          Callback
+                                                |
+                                                v
+                                          Application
+```
+## Các hàm triển khai QUIC với thư viện ngtcp2
+### 1. Phân biệt ngtcp2_conn và ngtcp2_conn_server_new()
+    **ngtcp2_conn *conn = NULL;**
+Ở đây:
+- ngtcp2_conn là một kiểu dữ liệu.
+- conn là con trỏ đến đối tượng lưu trữ trạng thái của một kết nối QUIC.
+- ngtcp2_conn_server_new() là hàm và khởi tạo đối tượng đó.
+Tóm lại:
+- Khi server nhận được QUIC Packet từ Client mới và xác định cần tạo kết nối, lúc này nó sẽ gọi hàm ngtcp2_conn_server_new().
+- Khi đó, hàm sẽ thực hiện một số công việc như
+    - Cấp phát bộ nhớ cho ngtcp2_conn
+    - Khởi tạo các trạng thái ban đầu của kết nối
+    - Thiết lập ConnectionID, đường truyền và các cấu hình cần thiết.
+    - Lưu những thông tin cần thiết để xử lý các Packet tiếp theo.
+- Sau khi hàm thực hiện thành công, chúng ta sẽ có:
+```text
+           conn
+             |
+             v
+    +----------------------+
+    | QUIC Connection      |
+    |----------------------|
+    | Connection IDs       |
+    | Handshake state      |
+    | Packet state         |
+    | Stream state         |
+    | Flow control         |
+    | Congestion control   |
+    | ...                  |
+    +----------------------+
+```
+- Chữ ký hàm: 
+ngtcp2_conn_server_new(
+    &conn,
+    &dcid,
+    &scid,
+    &path,
+    version,
+    &callbacks,
+    &settings,
+    &params,
+    NULL,
+    NULL
+);
+- Nhóm định danh đường truyền: Bao gồm dcid, scid, path,version nhằm xác định kết nối khởi tạo
+- Nhóm cấu hình giao thức: callbacks, settings, params nhằm quy định cách kết nối hoạt động
+- Nhóm quản lý đối tượng: conn, mem, user_data nhằm tạo đối tượng và gắn dữ liệu ứng dụng.
+- Ở đây, hàm ngtcp2_conn_read_pkt(conn, ...); sẽ sử dụng thông tin trong Packet để xử lý và cập nhật trạng thái kết nối.
+### 2. Hàm ngtcp2_accept()
+- Hàm được triển khai như sau:
+    ngtcp2_accept(
+        &hd,
+        (const uint8_t *) buffer,
+        (size_t)byte_received
+    );
+- Ở đây, hàm sẽ lưu dữ liệu các dcid, scid,... sau khi đọc và phần tích từ buffer với số byte sẽ đọc từ byte_received.
+- Bên trong ngtcp2_pkt_hd có cấu trúc như sau:
+    typedef struct ngtcp2_pkt_hd {
+        ngtcp2_cid dcid;
+        ngtcp2_cid scid;
+
+        int64_t pkt_num;
+
+        const uint8_t *token;
+        size_t tokenlen;
+
+        size_t pkt_numlen;
+        size_t len;
+
+        uint32_t version;
+        uint8_t type;
+        uint8_t flags;
+    } ngtcp2_pkt_hd;
+- Tức là nó sẽ bao gồm các thông tin về header bao gồm: Destination CID, Source CID, Version QUIC, Type QUIC Packet, Packet Number, Packet Number len (số byte dùng để mã hóa Packet Number), len (độ dài phần Packet Number cộng với payload)
+- Kiểu ngtcp2_cid thực chất có dạng:
+typedef struct {
+    size_t datalen;
+    uint8_t data[NGTCP2_MAX_CIDLEN];
+} ngtcp2_cid;
+### 3. ngtcp2_transport_params
+- Nó thể hiện các cấu trúc chứa những giới hạn và khả năng của QUIC mà 1 đầu kết nối công bố cho 1 đầu còn lại trong quá trình Hanshake. Gồm: giới hạn dữ liệu nhận, giới hạn số lượng stream, thời gian hoạt động, thông tin định danh trong quá trình thiết lập kết nối.
+```text
+ngtcp2_transport_params params;
+
+ngtcp2_transport_params_default(&params);
+
+// Flow Control ở cấp Connection
+params.initial_max_data = 1024 * 1024;
+
+// Flow Control ở cấp Stream
+params.initial_max_stream_data_bidi_local = 64 * 1024;
+params.initial_max_stream_data_bidi_remote = 64 * 1024;
+params.initial_max_stream_data_uni = 64 * 1024;
+
+// Giới hạn số Stream
+params.initial_max_streams_bidi = 10;
+params.initial_max_streams_uni = 10;
+
+// Thời gian không hoạt động
+params.max_idle_timeout = 30 * NGTCP2_SECONDS;
+
+// Original DCID của kết nối mới, không qua Retry
+params.original_dcid = hd.dcid;
+params.original_dcid_present = 1;
+```
+- Hàm ngtcp2_transport_params_default(&params); có 2 nhiệm vụ:
+    - Đặt toàn bộ cấu trúc về giá trị 0
+    - Gán các giá trị mặc định cho 4 trường, bao gồm: kích thước của UDP tối đa được công bố, hệ số dùng để giải mã ACK delay, độ trễ tối đa ACK được công bố, giới hạn connection ID đang hoạt động được cung cấp cho phía này.
+
+### 4. ngtcp2_path và ngtcp2_addr
+typedef struct {
+    ngtcp2_addr local;
+    ngtcp2_addr remote;
+    void *user_data;
+} ngtcp2_path;
+typedef struct {
+    ngtcp2_sockaddr *addr;
+    ngtcp2_socklen addrlen;
+} ngtcp2_addr;
+
+### 5. ngtcp2_settings
+- Là cấu trúc chứa các cấu trúc để điều khiển hoạt động của QUIC CONNECTION đang chạy ở phía chương trình đang chạy.
+- Chúng ta có thể hiểu rằng:
+    - ngtcp2_transport_params sẽ giới hạn và khả năng công bố cho client
+    - ngtcp2_settings sẽ chứa cách ngtcp2 vận hành
+- Trong ngtcp2_settings có các trường như sau:
+    - cc_algo (ngtcp2_cc_algo): Thuật toán điều khiển tắc nghẽn
+    - initial_ts (ngtcp2_tstamp): Thời điểm bắt đầu Connection
+    - initial-rtt (ngtcp2_duration): Giá trị RTT ước lượng ban đầu
+    - max_tx_udp_payload_size (size_t): Kích thước Payload tối đa mà phía Client có thể tạo và gửi
+    - handshake_timeout (ngtcp2_duration): Thời gian tối đa cho phép hoàn thành handshake
+    - ack_thresh (số nguyên): Ngưỡng ACK mà ngtcp2 sử dụng trong cơ chế xác nhận
+    - qlog_write (con trỏ hàm): callback ghi lại dữ liệu qlog phục vụ phân tích
+    - max_window (số nguyên): Giới hạn cửa sổ nhận tự động ở cấp Connection
+    - max_stream_window (số nguyên): Giới hạn cửa sổ nhận tự động ở cấp Stream
+
+ngtcp2_settings settings
+│
+├── initial_ts
+├── initial_rtt
+├── handshake_timeout
+├── cc_algo
+├── max_tx_udp_payload_size
+├── ack_thresh
+├── qlog_write
+└── ...
+hàm trước tiên đặt cấu trúc về giá trị 0, sau đó thiết lập một số giá trị mặc định, chẳng hạn:
+| Trường | Giá trị mặc định |
+|---|---|
+| `cc_algo` | CUBIC |
+| `initial_rtt` | 333 ms |
+| `ack_thresh` | 2 |
+| `max_tx_udp_payload_size` | 1452 byte |
+| `handshake_timeout` | `UINT64_MAX` |
