@@ -1,0 +1,8 @@
+/bin/
+/build/
+/.deps/
+/.deps-build/
+/certs/*.key
+/certs/*.crt
+/tests/.tmp/
+/backup/
