@@ -21,8 +21,8 @@
     - \*host: Server dùng làm địa chỉ để bind, Client dùng để làm địa chỉ đích
     - \*port: bind UDP socket vào port để nhận packet hoặc gửi packet từ client tới port đó trên máy server
     - \*cert: Đường dẫn tới chứng chỉ của Server
-    - *key: Đường dẫn tới chứng chỉ private key của Server 
-    - *ca: Đường dẫn tới chứng chỉ hoặc tập chứng chỉ mà Client dùng để kiểm tra Server
+    - \*key: Đường dẫn tới chứng chỉ private key của Server
+    - \*ca: Đường dẫn tới chứng chỉ hoặc tập chứng chỉ mà Client dùng để kiểm tra Server
     - \*server_name: Danh tính DNS/IP mà client cần đối chiếu với chứng chỉ server (giả sử localhost).
     - \*message: Thông điệp gửi đi
     - \*input: Đường dẫn gửi đi
@@ -37,20 +37,23 @@
     - remote: địa chỉ IP và Port của phía còn lại
   - ngtcp2_conn \*quic: ngtcp2_conn trường này chứa địa chỉ của đối tượng chứa các trạng thái của một connection bao gồm: trạng thái handshake, stream, ack, timer, recovery trạng thái truyền.
   - ngtcp2_crypto_conn_ref conn_ref: giúp phần tích hợp TLS tìm lại QUIC connection tương ứng:
+
   ```text
   typedef struct ngtcp2_crypto_conn_ref {
       ngtcp2_crypto_get_conn get_conn;
       void *user_data;
   } ngtcp2_crypto_conn_ref;
   ```
-    - ngtcp2_crypto_get_conn là con trỏ hàm: đưa hàm tới đối tượng tham chiếu, hàm trả lại con trỏ tới QUIC connection, tức là: Đặt tên cho con trỏ hàm là ngtcp2_crypto_get_conn, con trỏ hàm này phải trỏ tới hàm nhận giá trị ngtcp2_crypto_conn_ref* conn_ref và phải trả về kiểu ngtcp2_conn* 
+
+  - ngtcp2_crypto_get_conn là con trỏ hàm: đưa hàm tới đối tượng tham chiếu, hàm trả lại con trỏ tới QUIC connection, tức là: Đặt tên cho con trỏ hàm là ngtcp2_crypto_get_conn, con trỏ hàm này phải trỏ tới hàm nhận giá trị ngtcp2_crypto_conn_ref* conn_ref và phải trả về kiểu ngtcp2_conn*
 
   ```text
       typedef ngtcp2_conn *(*ngtcp2_crypto_get_conn)(
           ngtcp2_crypto_conn_ref *conn_ref);
   ```
-    - void *user_data: ở đây sẽ chứa địa chỉ của end_point
-  - Tóm lại, cấu trúc này này sẽ giúp các hàm khác lấy được địa chỉ của trạng thái kết nối để xử lý, cấu trúc này chứa trường con trỏ hàm ngtcp2_crypto_get_conn get_conn nhằm tìm lại được địa chỉ của trạng thái kết nối,trường con trỏ dữ liệu void *user_data chứa địa chỉ của end_point (để lấy địa chỉ của trạng thái kết nối của end_point đó).
+
+  - void \*user_data: ở đây sẽ chứa địa chỉ của end_point
+  - Tóm lại, cấu trúc này này sẽ giúp các hàm khác lấy được địa chỉ của trạng thái kết nối để xử lý, cấu trúc này chứa trường con trỏ hàm ngtcp2_crypto_get_conn get_conn nhằm tìm lại được địa chỉ của trạng thái kết nối,trường con trỏ dữ liệu void \*user_data chứa địa chỉ của end_point (để lấy địa chỉ của trạng thái kết nối của end_point đó).
   - gnutls_session_t tls: là đối tượng trong bộ nhớ, giúp thư viện thực hiện và theo dõi trạng thái TLS cho một lượt kết nối mới
     - Nó cần thiết bởi vì client và server cần handshake và 2 bên cần trao đổi thông điệp và xử lý trong nhiều bước.
     - Chẳng hạn Client chuẩn bị thông điệp handshake đầu tiên -> Client gửi nó cho Server thông qua QUIC -> Server nhận được và xử lý -> Server tạo phản hồi và gửi -> Client nhận phản hồi và xử lý phản hồi -> Hai bên hoàn thành handshake.
@@ -59,26 +62,27 @@
       - Đang dùng thuật toán mã hóa nào
       - Nhận được những thông tin gì từ Server
       - Chứng chỉ Server có hợp lệ hay không
-      - Những khóa nào đã được dẫn xuất 
+      - Những khóa nào đã được dẫn xuất
   - gnutls_certificate_credentials credentials: Trong chương trình, Server cần chứng chỉ để cho Client và private key tương ứng để chứng minh quyền sở hữu khóa, còn Client cần các chứng chỉ tin cậy để kiểm tra Server. Trường này được sử dụng để quản lý những thông tin này, nó sẽ giữ địa chỉ kết nối cảu đối tượng chứa các thông tin này.
 
   - int tb_parse_option(tb_option *o, bool server, int argc, char **argv): hàm này sẽ điền các giá trị vào tb_option, char **argv là con trỏ cấp 2 vì cần cập nhật *message.
   - int tb_endpoint_init(tp_endpoint *ep, const tb_option *o, bool server): Hàm này sẽ khởi tạo trạng thái ban đầu của một endpoint, cập nhật các trường của endpoint
-  - void tb_endpoint_free(tb_endpoint *ep): thu hồi tài nguyên của endpoint
-  - int tb_socket_open(tb_endpoint *ep): tạo và chuẩn bị UDP socket
-  - int tb_socket_connect(tb_endpoint *ep): chọn peer cho UDP socket, gọi connect cho UDP socket
-  - ntcp2_path tb_path(tb_endpoint *ep): tạo thông tin đường truyền cho ngtcp2, bao gồm địa chỉ local, địa chỉ remote
-  ```text 
+  - void tb_endpoint_free(tb_endpoint \*ep): thu hồi tài nguyên của endpoint
+  - int tb_socket_open(tb_endpoint \*ep): tạo và chuẩn bị UDP socket
+  - int tb_socket_connect(tb_endpoint \*ep): chọn peer cho UDP socket, gọi connect cho UDP socket
+  - ntcp2_path tb_path(tb_endpoint \*ep): tạo thông tin đường truyền cho ngtcp2, bao gồm địa chỉ local, địa chỉ remote
+
+  ```text
   - void tb_quic_config(tb_endpoint *ep, ngtcp2_callbacks *cb,
                     ngtcp2_settings *settings, ngtcp2_transport_params *params);
   ```
+
   => chuẩn bị về callback, settings và transport
-  - int tb_random_cid(ngtcp2_cid *cid, size_t length): sinh các CID ngẫu nhiên
-  - int tb_tls_finish(tb_endpoint *ep): hoàn thiện phần cấu hình TLS session và liên kết các các đối tượng đã chuẩn bị
+  - int tb_random_cid(ngtcp2_cid \*cid, size_t length): sinh các CID ngẫu nhiên
+  - int tb_tls_finish(tb_endpoint \*ep): hoàn thiện phần cấu hình TLS session và liên kết các các đối tượng đã chuẩn bị
   - int tb_read_packet(tb_endpoint *ep, const uint8_t *data, size_t length): Đưa packet được nhận vào ngtcp2 để xử lý
-  - int tb_event_loop(tb_endpoint *ep): chạy vòng lặp điều phối connection
-  - void tb_send_error(tb_endpoint *ep, int liberr): gửi thông tin đóng connection do lỗi
-  - void tb_print_stats(tb_endpoint *ep, int result): in số liệu của lượt chạy
-  - int tb_load_payload(tb_endpoint *ep): nạp dữ liệu ứng dụng cần gửi
-  - int tb_save_echo(tb_endpoint *ep): lưu echo ra file
-  
+  - int tb_event_loop(tb_endpoint \*ep): chạy vòng lặp điều phối connection
+  - void tb_send_error(tb_endpoint \*ep, int liberr): gửi thông tin đóng connection do lỗi
+  - void tb_print_stats(tb_endpoint \*ep, int result): in số liệu của lượt chạy
+  - int tb_load_payload(tb_endpoint \*ep): nạp dữ liệu ứng dụng cần gửi
+  - int tb_save_echo(tb_endpoint \*ep): lưu echo ra file
