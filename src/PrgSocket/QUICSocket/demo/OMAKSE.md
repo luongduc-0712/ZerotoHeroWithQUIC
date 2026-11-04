@@ -86,3 +86,10 @@
   - void tb_print_stats(tb_endpoint \*ep, int result): in số liệu của lượt chạy
   - int tb_load_payload(tb_endpoint \*ep): nạp dữ liệu ứng dụng cần gửi
   - int tb_save_echo(tb_endpoint \*ep): lưu echo ra file
+
+phần mềm đấu nối được đến môi trường mạng ảo là (định nghĩa về wifi, dây, kết nối,...) => phần mềm bên ngoài (không mạng ảo mà mạng thật), kiểm soát được các process với các môi trường, mô tả rõ mininet, có thể làm một máy ảo không để đưa thẳng broker vào
+mqtt over quic: tạo publisher và subcriber
+phần mềm emqx chạy được mạng ảo
+capture công cụ wireshake
+đánh giá khi tăng nhiều process, tiến trình, tc (tóm lại chứng minh được công cụ mạng ảo đang chạy được trên máy tính của chúng ta)
+mqtt chỉ đo lưu lượng
