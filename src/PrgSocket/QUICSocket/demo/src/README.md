@@ -1,17 +1,55 @@
-# QUIC testbed: một client — một server
+# QUIC testbed: sensor liên tục, một client — một server
 
 Đây là chương trình C chạy trên **Linux/WSL**, dùng **ngtcp2 1.25.0** và
 **GnuTLS >= 3.7.2**. Server và client giao tiếp bằng QUIC v1 trên UDP, bắt tay
 TLS 1.3 và trao đổi dữ liệu qua **một bidirectional stream, ID 0**.
 Client gửi dữ liệu, server echo nguyên vẹn, client so sánh từng byte.
-Mỗi lần chạy xử lý một kết nối; chương trình tự thoát sau khi hoàn tất.
+Mỗi lần chạy xử lý một kết nối. Client hỗ trợ gửi một message/file hoặc sensor
+mô phỏng gửi JSONL định kỳ qua cùng stream cho đến khi đủ mẫu hay nhấn Ctrl+C.
+
+## Chạy sensor trên Mininet h1–s1–h2
+
+```text
+h1 (sensor, 10.0.0.1) —— s1 (Open vSwitch bridge) —— h2 (server, 10.0.0.2)
+```
+
+Mininet chạy binary Linux thật trong các network namespace: hai host có IP
+riêng nhưng dùng chung filesystem. QUIC chạy trên UDP nên không cần đổi sang
+giao thức riêng cho Mininet. Cần Linux có quyền root và hỗ trợ namespace/veth.
+
+Sau khi build và tạo cert bằng các lệnh ở mục 3:
+
+```bash
+sudo /usr/bin/python3 scripts/mininet-demo.py
+```
+
+Lệnh tạo topology, chạy server trên h2 và sensor trên h1 (20 mẫu, mỗi giây),
+kiểm tra echo rồi dọn topology. Không cần controller SDN. Xem
+[hướng dẫn Mininet từng bước](docs/MININET.md) để cài gói, tự dùng CLI,
+gửi vô hạn hoặc thêm delay/loss/bandwidth.
+
+Sensor cũng chạy thử được trên loopback, không cần sudo. Trong hai terminal
+ở thư mục này, chạy server trước rồi chạy client:
+
+```bash
+./bin/quic-server --host 127.0.0.1 --timeout 30
+./bin/quic-client --host 127.0.0.1 --sensor --interval-ms 1000 --count 0 --timeout 30
+```
+
+`--count 0` gửi đến khi nhấn Ctrl+C ở client; `--count 100` gửi đúng 100 mẫu.
+Một mẫu gồm `seq`, `timestamp_ms` (Unix ms), `temperature_c`, `humidity_pct`.
+Đây là dữ liệu giả lập. Client kiểm tra echo từng byte cho mỗi mẫu; lần Ctrl+C
+đầu gửi FIN và chờ mẫu cuối hoàn tất, lần thứ hai buộc dừng.
+Sensor giữ tối đa một mẫu đang chờ echo/ACK; chu kỳ là khoảng cách tối thiểu,
+đường truyền chậm có thể giảm tốc độ lấy mẫu. Sensor không giới hạn tổng
+stream ở 64 KiB; hàng đợi truyền lại vẫn có bộ nhớ giới hạn.
 
 ## 1. Vị trí và cấu trúc
 
 Mã được triển khai tại:
 
 ```text
-C:\Users\Admin\ZerotoHeroWithQUIC\src\PrgSocket\QUICSocket\demo\src
+/home/nguyenluongduc/Github/QUIC/ZerotoHeroWithQUIC/src/PrgSocket/QUICSocket/demo/src
 ```
 
 ```text
@@ -37,7 +75,9 @@ src/
 │   └── testbed.h
 ├── scripts/
 │   ├── build-deps.sh
-│   └── gen-certs.sh
+│   ├── gen-certs.sh
+│   └── mininet-demo.py
+├── docs/MININET.md
 ├── tests/integration.py
 ├── Makefile
 ├── README.md
@@ -57,16 +97,10 @@ Makefile chỉ biên dịch các file thuộc ba thư mục mã trên.
 
 ## 2. Chạy ngay trên máy hiện tại
 
-Mở **hai terminal Ubuntu trong WSL**. Nếu đang ở PowerShell, dùng:
-
-```powershell
-wsl -d Ubuntu-22.04
-```
-
-Trong cả hai terminal Linux, chuyển vào thư mục:
+Mở **hai terminal Linux**, chuyển vào thư mục:
 
 ```bash
-cd /mnt/c/Users/Admin/ZerotoHeroWithQUIC/src/PrgSocket/QUICSocket/demo/src
+cd /home/nguyenluongduc/Github/QUIC/ZerotoHeroWithQUIC/src/PrgSocket/QUICSocket/demo/src
 ```
 
 Terminal thứ nhất, chạy server trước:
@@ -83,7 +117,7 @@ Terminal thứ hai:
 
 Client phải in `handshake complete`, `ECHO VERIFIED`, `result=PASS`.
 Server phải in `handshake complete`, số byte nhận được và `result=PASS`.
-Chạy lại server trước mỗi lượt client tiếp theo. Bản triển khai đã build gồm
+Chạy lại server trước mỗi lượt client tiếp theo. Sau khi build có
 hai binary Linux trong `bin/` và thư viện trong `.deps/`; chạy từ thư mục `src`
 để các đường dẫn chứng chỉ mặc định đúng.
 
@@ -183,8 +217,11 @@ Client                                Server
   |--- QUIC Initial / TLS ClientHello -->|
   |<------ TLS 1.3 handshake ------------|
   |------- TLS handshake completion ---->|
-  |--- STREAM 0: request + FIN ---------->|
-  |<-- STREAM 0: identical echo + FIN ----|
+  |--- STREAM 0: request/sample --------->|
+  |<-- STREAM 0: identical echo ---------|
+  |--- ... các mẫu tiếp theo ... -------->|
+  |--- STREAM 0: FIN khi hết dữ liệu ---->|
+  |<-- STREAM 0: echo còn lại + FIN ------|
   |--- ACK / application CLOSE(0) ------->|
 ```
 
@@ -194,7 +231,10 @@ ALPN của hai phía là `quic-testbed/1`.
 
 Vòng lặp dùng socket nonblocking và `poll`, kết hợp
 `ngtcp2_conn_get_expiry`/`ngtcp2_conn_handle_expiry` để xử lý ACK, PTO và truyền lại.
-Buffer gửi được giữ cho đến khi hủy kết nối để ngtcp2 có thể retransmit.
+Buffer gửi có địa chỉ cố định, chỉ tái sử dụng sau ACK để ngtcp2 retransmit.
+Client sensor còn chờ so sánh echo trước khi tái sử dụng. Server echo ngay
+mỗi chunk, giữ tối đa 64 KiB chờ ACK và cấp thêm flow-control credit khi
+echo đã ACK; stream dài không làm bộ nhớ tăng theo thời gian.
 Không tắt kiểm tra chứng chỉ. Stream rỗng vẫn gửi FIN.
 
 Server bỏ qua datagram không phải Initial QUIC v1 trước khi chọn peer.
@@ -217,12 +257,18 @@ make test
 
 Tham số chung: `--host`, `--port`, `--timeout` (1..3600 giây), `--verbose`, `--help`.
 Server thêm `--cert`, `--key`. Client thêm `--ca`, `--server-name`, `--message`,
-`--file`, `--output`. Port hợp lệ là 1..65535. `--host` nhận IPv4 dạng số;
+`--file`, `--output`, `--sensor`, `--interval-ms` (1..60000), `--count`
+(0..1000000). Sensor không dùng cùng message/file/output. Interval và count
+chỉ dùng với sensor; interval phải nhỏ hơn timeout tính theo ms.
+Port hợp lệ là 1..65535. `--host` nhận IPv4 dạng số;
 client không nhận `0.0.0.0` làm đích.
 
 Timeout mặc định 15 giây. Server có tối đa một khoảng timeout chờ Initial,
-rồi một khoảng timeout cho kết nối sau khi đã chọn client. Client tính từ
-lúc chương trình khởi tạo. Ctrl+C dừng chương trình và giải phóng tài nguyên.
+rồi tính timeout không có tiến triển: cập nhật khi handshake, nhận dữ liệu
+hoặc ACK echo. Client một lượt tính tổng timeout từ lúc khởi tạo; client
+sensor dùng timeout không có tiến triển, cập nhật khi handshake/nhận echo.
+Vì vậy sensor có thể chạy lâu hơn timeout nếu vẫn trao đổi dữ liệu.
+Ctrl+C dừng chương trình và giải phóng tài nguyên; sensor drain như mô tả trên.
 Mã thoát 0 là thành công/help, 1 là lỗi chạy, 2 là lỗi tham số.
 
 Log có số byte ứng dụng đã nộp cho QUIC/đã nhận, số datagram UDP và byte UDP,
@@ -235,7 +281,10 @@ benchmark throughput. `wire_tx/rx` tính payload UDP, không tính header IP/UDP
 Bộ kiểm thử chạy các tiến trình thật, kiểm tra: thông điệp, datagram rác trước
 Initial, stream rỗng, file nhị phân 64 KiB, truyền lại khi relay làm mất Initial
 ở cả hai chiều, giới hạn kích thước, CA sai, danh tính chứng chỉ sai, timeout
-hai phía và tham số sai. Không cần chạy thêm server thủ công khi `make test`.
+hai phía và tham số sai. Còn có sensor định kỳ, stream sensor vượt 64 KiB,
+stream sống quá inactivity timeout khi đang hoạt động, mất Initial và dừng
+sensor vô hạn bằng SIGINT. Không cần server thủ công khi `make test`.
+`make test` dùng UDP loopback; topology thật chạy riêng bằng script Mininet.
 
 Nguồn API chính thức:
 

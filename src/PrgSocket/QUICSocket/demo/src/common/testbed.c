@@ -52,18 +52,22 @@ int tb_parse_options(tb_options *o, bool server, int argc, char **argv) {
         {"message", required_argument, NULL, 'm'},
         {"file", required_argument, NULL, 'f'},
         {"output", required_argument, NULL, 'o'},
+        {"sensor", no_argument, NULL, 's'},
+        {"interval-ms", required_argument, NULL, 'i'},
+        {"count", required_argument, NULL, 'C'},
         {"verbose", no_argument, NULL, 'v'},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
     int ch;
     unsigned port;
-    bool message_given = false;
+    bool message_given = false, interval_given = false, count_given = false;
     *o = (tb_options){.host = "127.0.0.1", .port = "4433",
         .cert = "certs/server.crt", .key = "certs/server.key",
-        .ca = "certs/server.crt", .message = "Hello QUIC", .timeout = 15};
+        .ca = "certs/server.crt", .message = "Hello QUIC", .timeout = 15,
+        .interval_ms = 1000};
     while ((ch = getopt_long(argc, argv, "", opts, NULL)) != -1) {
-        if ((server && strchr("anmfo", ch)) ||
+        if ((server && ch > 0 && strchr("anmfosiC", ch)) ||
             (!server && (ch == 'c' || ch == 'k'))) {
             fprintf(stderr, "Option is not supported for this endpoint.\n");
             return -1;
@@ -84,19 +88,40 @@ int tb_parse_options(tb_options *o, bool server, int argc, char **argv) {
         case 'm': o->message = optarg; message_given = true; break;
         case 'f': o->input = optarg; break;
         case 'o': o->output = optarg; break;
+        case 's': o->sensor = true; break;
+        case 'i':
+            if (number(optarg, 1, 60000, &o->interval_ms)) {
+                fprintf(stderr, "--interval-ms must be 1..60000.\n");
+                return -1;
+            }
+            interval_given = true;
+            break;
+        case 'C':
+            if (number(optarg, 0, 1000000, &o->count)) {
+                fprintf(stderr, "--count must be 0..1000000 (0 = until Ctrl+C).\n");
+                return -1;
+            }
+            count_given = true;
+            break;
         case 'v': o->verbose = true; break;
         case 'h':
             printf("Usage: %s [--host IPv4] [--port 4433] [--timeout 15] [--verbose]\n", argv[0]);
             puts(server ? "  [--cert certs/server.crt] [--key certs/server.key]" :
                 "  [--ca certs/server.crt] [--server-name NAME]\n"
-                "  [--message TEXT | --file PATH] [--output PATH]");
-            puts("One connection, one bidirectional echo stream; maximum payload 65536 bytes.");
+                "  [--message TEXT | --file PATH] [--output PATH]\n"
+                "  OR --sensor [--interval-ms 1000] [--count 0]\n"
+                "  Sensor: synthetic JSONL on one QUIC stream; count 0 runs until Ctrl+C.");
+            puts("One connection, one bidirectional echo stream; one-shot payload max 65536 bytes.\n"
+                 "--timeout: one-shot client total deadline; sensor/server inactivity timeout.");
             return 1;
         default: return -1;
         }
     }
     if (optind != argc || number(o->port, 1, 65535, &port) ||
-        (message_given && o->input) || (o->server_name && !o->server_name[0])) {
+        (message_given && o->input) || (o->server_name && !o->server_name[0]) ||
+        (!o->sensor && (interval_given || count_given)) ||
+        (o->sensor && (message_given || o->input || o->output ||
+                      o->interval_ms >= o->timeout * 1000u))) {
         fprintf(stderr, "Invalid arguments; use --help.\n");
         return -1;
     }
@@ -224,6 +249,8 @@ static int handshake_done(ngtcp2_conn *conn, void *data) {
     }
     ep->handshake = true;
     ep->handshake_at = tb_now();
+    if (ep->server || ep->options->sensor)
+        ep->deadline = ep->handshake_at + (uint64_t)ep->options->timeout * NGTCP2_SECONDS;
     printf("[%s] handshake complete: %s, %s, ALPN=%s\n",
         ep->server ? "server" : "client",
         gnutls_protocol_get_name(gnutls_protocol_get_version(ep->tls)),
@@ -235,28 +262,64 @@ static int receive_stream(ngtcp2_conn *conn, uint32_t flags, int64_t id,
                           uint64_t offset, const uint8_t *data, size_t len,
                           void *user, void *stream_user) {
     tb_endpoint *ep = user;
-    (void)conn; (void)stream_user;
+    (void)stream_user;
     /* Client initiated bidirectional stream 0 is the only application stream. */
     if (id != 0 || (ep->stream_id != -1 && ep->stream_id != id) || ep->rx_fin ||
-        offset != ep->rx_len || len > TB_MAX_DATA - ep->rx_len ||
+        offset != ep->rx_len || UINT64_MAX - ep->rx_len < len ||
         (flags & NGTCP2_STREAM_DATA_FLAG_0RTT)) {
-        fprintf(stderr, "Unexpected stream, offset or payload size.\n");
+        fprintf(stderr, "Unexpected stream or offset.\n");
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
     ep->stream_id = id;
-    if (len) memcpy(ep->rx + ep->rx_len, data, len);
+    if (ep->server) {
+        if (len > TB_MAX_DATA - (ep->tx_len - ep->tx_acked)) {
+            fprintf(stderr, "Echo retransmit queue overflow.\n");
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+        /* Queue echo immediately, without waiting for FIN. Do not move bytes
+         * still referenced by ngtcp2 for retransmission. */
+        for (size_t i = 0; i < len; ++i)
+            ep->tx[(ep->tx_len + i) % TB_MAX_DATA] = data[i];
+        ep->tx_len += len;
+        ep->tx_ready = true;
+        if (!ep->data_started) ep->data_started = tb_now();
+        ep->deadline = tb_now() + (uint64_t)ep->options->timeout * NGTCP2_SECONDS;
+        if (len) printf("[server] stream=%" PRId64 " received_chunk=%zu total=%" PRIu64 " bytes\n",
+                        id, len, ep->rx_len + len);
+    } else {
+        if (ep->rx_len > ep->tx_offset || len > ep->tx_offset - ep->rx_len) {
+            fprintf(stderr, "Echo exceeds submitted request.\n");
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+        for (size_t i = 0; i < len; ++i) {
+            if (data[i] != ep->tx[(ep->rx_len + i) % TB_MAX_DATA]) {
+                fprintf(stderr, "Echo content does not match the request.\n");
+                return NGTCP2_ERR_CALLBACK_FAILURE;
+            }
+        }
+        if (!ep->options->sensor && len) memcpy(ep->rx + ep->rx_len, data, len);
+        if (len) {
+            if (ngtcp2_conn_extend_max_stream_offset(conn, id, len))
+                return NGTCP2_ERR_CALLBACK_FAILURE;
+            ngtcp2_conn_extend_max_offset(conn, len);
+        }
+    }
     ep->rx_len += len;
+    if (!ep->server && ep->options->sensor && len) {
+        ep->deadline = tb_now() + (uint64_t)ep->options->timeout * NGTCP2_SECONDS;
+        if (ep->rx_len == ep->tx_len) {
+            ep->sensor_verified = ep->sensor_generated;
+            printf("[sensor] echo verified seq=%u\n", ep->sensor_verified);
+        }
+    }
     if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) {
         ep->rx_fin = true;
-        printf("[%s] stream=%" PRId64 " received=%zu bytes, FIN\n",
+        printf("[%s] stream=%" PRId64 " received=%" PRIu64 " bytes, FIN\n",
             ep->server ? "server" : "client", id, ep->rx_len);
         if (ep->server) {
-            memcpy(ep->tx, ep->rx, ep->rx_len);
-            ep->tx_len = ep->rx_len;
-            ep->tx_ready = true;
-            ep->data_started = tb_now();
+            ep->tx_eof = true;
         } else {
-            if (ep->rx_len != ep->tx_len || memcmp(ep->rx, ep->tx, ep->rx_len)) {
+            if (!ep->tx_eof || ep->rx_len != ep->tx_len) {
                 fprintf(stderr, "Echo content does not match the request.\n");
                 return NGTCP2_ERR_CALLBACK_FAILURE;
             }
@@ -264,6 +327,24 @@ static int receive_stream(ngtcp2_conn *conn, uint32_t flags, int64_t id,
             ep->data_finished = tb_now();
             puts("[client] ECHO VERIFIED");
         }
+    }
+    return 0;
+}
+
+static int acked_stream(ngtcp2_conn *conn, int64_t id, uint64_t offset,
+                        uint64_t len, void *user, void *stream_user) {
+    tb_endpoint *ep = user;
+    (void)stream_user;
+    if (id != ep->stream_id || offset != ep->tx_acked ||
+        len > ep->tx_offset - ep->tx_acked) return NGTCP2_ERR_CALLBACK_FAILURE;
+    ep->tx_acked += len;
+    /* Only release server receive credit once the echo has left our bounded
+     * retransmit queue. A slow reverse path therefore applies backpressure. */
+    if (ep->server && len) {
+        if (ngtcp2_conn_extend_max_stream_offset(conn, id, len))
+            return NGTCP2_ERR_CALLBACK_FAILURE;
+        ngtcp2_conn_extend_max_offset(conn, len);
+        ep->deadline = tb_now() + (uint64_t)ep->options->timeout * NGTCP2_SECONDS;
     }
     return 0;
 }
@@ -298,6 +379,7 @@ void tb_quic_config(tb_endpoint *ep, ngtcp2_callbacks *cb,
         .decrypt = ngtcp2_crypto_decrypt_cb,
         .hp_mask = ngtcp2_crypto_hp_mask_cb,
         .recv_stream_data = receive_stream,
+        .acked_stream_data_offset = acked_stream,
         .recv_retry = ep->server ? NULL : ngtcp2_crypto_recv_retry_cb,
         .rand = random_bytes,
         .get_new_connection_id2 = new_cid,
@@ -362,13 +444,40 @@ static int send_datagram(tb_endpoint *ep, const uint8_t *data, size_t len) {
     }
 }
 
+static int sensor_tick(tb_endpoint *ep, ngtcp2_tstamp now) {
+    if (ep->server || !ep->options->sensor || ep->stream_id == -1 || ep->tx_eof ||
+        now < ep->next_sample || ep->rx_len != ep->tx_len || ep->tx_acked != ep->tx_len)
+        return 0;
+    /* Keep at most one synthetic reading awaiting ACK/echo. Slow links reduce
+     * the sampling rate instead of allocating unbounded application buffers. */
+    struct timespec wall;
+    if (clock_gettime(CLOCK_REALTIME, &wall)) { perror("sensor timestamp"); return -1; }
+    uint64_t ms = (uint64_t)wall.tv_sec * 1000u + (uint64_t)wall.tv_nsec / 1000000u;
+    unsigned seq = ep->sensor_generated + 1u;
+    char sample[256];
+    int n = snprintf(sample, sizeof(sample),
+        "{\"seq\":%u,\"timestamp_ms\":%" PRIu64 ",\"temperature_c\":%u.%u,\"humidity_pct\":%u.%u}\n",
+        seq, ms, 20u + seq % 100u / 10u, seq % 10u,
+        50u + seq % 200u / 10u, seq % 10u);
+    if (n < 0 || (size_t)n >= sizeof(sample) || UINT64_MAX - ep->tx_len < (unsigned)n)
+        return -1;
+    for (int i = 0; i < n; ++i)
+        ep->tx[(ep->tx_len + (unsigned)i) % TB_MAX_DATA] = (uint8_t)sample[i];
+    ep->tx_len += (unsigned)n;
+    ep->sensor_generated = seq;
+    ep->next_sample = now + (uint64_t)ep->options->interval_ms * NGTCP2_MILLISECONDS;
+    if (ep->options->count && seq == ep->options->count) ep->tx_eof = true;
+    printf("[sensor] %s", sample);
+    return 0;
+}
+
 static int flush_packets(tb_endpoint *ep) {
     uint8_t packet[1500];
     ngtcp2_tstamp now = tb_now();
     for (unsigned i = 0; i < 32; ++i) {
         ngtcp2_ssize consumed = -1;
         int64_t stream = -1;
-        ngtcp2_vec vec;
+        ngtcp2_vec vec[2];
         size_t veccnt = 0;
         uint32_t flags = 0;
         if (!ep->server && ep->handshake && ep->stream_id == -1) {
@@ -376,24 +485,41 @@ static int flush_packets(tb_endpoint *ep) {
             if (rv && rv != NGTCP2_ERR_STREAM_ID_BLOCKED) return rv;
             if (!rv) { ep->tx_ready = true; ep->data_started = now; }
         }
-        if (ep->tx_ready && !ep->tx_fin) {
+        if (sensor_tick(ep, now)) return NGTCP2_ERR_CALLBACK_FAILURE;
+        if (ep->tx_ready && !ep->tx_fin &&
+            (ep->tx_offset < ep->tx_len || ep->tx_eof)) {
             stream = ep->stream_id;
-            vec.base = ep->tx + ep->tx_offset;
-            vec.len = ep->tx_len - ep->tx_offset;
+            size_t pos = (size_t)(ep->tx_offset % TB_MAX_DATA);
+            size_t pending = (size_t)(ep->tx_len - ep->tx_offset);
+            size_t first = pending < TB_MAX_DATA - pos ? pending : TB_MAX_DATA - pos;
+            vec[0].base = ep->tx + pos;
+            vec[0].len = first;
             veccnt = 1;
-            flags = NGTCP2_WRITE_STREAM_FLAG_FIN;
+            if (pending > first) {
+                vec[1].base = ep->tx;
+                vec[1].len = pending - first;
+                veccnt = 2;
+            }
+            if (ep->tx_eof) flags = NGTCP2_WRITE_STREAM_FLAG_FIN;
         }
         ngtcp2_path_storage ps;
         ngtcp2_pkt_info pi = {0};
         ngtcp2_path_storage_zero(&ps);
         ngtcp2_ssize n = ngtcp2_conn_writev_stream(ep->quic, &ps.path, &pi,
             packet, sizeof(packet), &consumed, flags, stream,
-            veccnt ? &vec : NULL, veccnt, now);
+            veccnt ? vec : NULL, veccnt, now);
+        if (n == NGTCP2_ERR_STREAM_DATA_BLOCKED) {
+            /* Flow control is temporary. Still emit ACK, retransmission and
+             * connection-control packets while waiting for peer credit. */
+            stream = -1;
+            n = ngtcp2_conn_writev_stream(ep->quic, &ps.path, &pi,
+                packet, sizeof(packet), &consumed, 0, -1, NULL, 0, now);
+        }
         if (n < 0) return (int)n;
         if (!n) break;
         if (consumed >= 0 && stream != -1) {
             ep->tx_offset += (size_t)consumed;
-            if (ep->tx_offset == ep->tx_len) ep->tx_fin = true;
+            if (ep->tx_eof && ep->tx_offset == ep->tx_len) ep->tx_fin = true;
         }
         /* tx[] remains allocated until ngtcp2_conn_del, including retransmits. */
         if (send_datagram(ep, packet, (size_t)n)) return NGTCP2_ERR_CALLBACK_FAILURE;
@@ -463,7 +589,18 @@ static int finish_connection(tb_endpoint *ep) {
 
 int tb_event_loop(tb_endpoint *ep) {
     uint8_t packet[65536];
-    while (!tb_interrupted) {
+    for (;;) {
+        if (tb_interrupted) {
+            if (!ep->server && ep->options->sensor && ep->handshake && !ep->sensor_stopping) {
+                tb_interrupted = 0;
+                ep->sensor_stopping = true;
+                ep->tx_eof = true;
+                puts("[sensor] stopping: sending FIN and waiting for verified echo");
+            } else {
+                fprintf(stderr, "Interrupted.\n");
+                return -1;
+            }
+        }
         ngtcp2_tstamp now = tb_now();
         if (now >= ep->deadline) { fprintf(stderr, "Test deadline expired.\n"); return -1; }
         if (now >= ngtcp2_conn_get_expiry(ep->quic)) {
@@ -476,6 +613,9 @@ int tb_event_loop(tb_endpoint *ep) {
         now = tb_now();
         ngtcp2_tstamp next = ngtcp2_conn_get_expiry(ep->quic);
         if (next > ep->deadline) next = ep->deadline;
+        if (!ep->server && ep->options->sensor && !ep->tx_eof && ep->handshake &&
+            ep->tx_len == ep->rx_len && ep->tx_len == ep->tx_acked &&
+            ep->next_sample < next) next = ep->next_sample;
         uint64_t delay_ms = next > now ? (next - now + NGTCP2_MILLISECONDS - 1) /
             NGTCP2_MILLISECONDS : 0;
         int wait_ms = delay_ms > 20 ? 20 : (int)delay_ms;
@@ -517,12 +657,10 @@ int tb_event_loop(tb_endpoint *ep) {
             if (rv) { tb_send_error(ep, rv); return rv; }
         }
     }
-    fprintf(stderr, "Interrupted.\n");
-    return -1;
 }
 
 void tb_print_stats(tb_endpoint *ep, int result) {
-    printf("[%s] result=%s app_tx=%zu app_rx=%zu udp_tx=%" PRIu64
+    printf("[%s] result=%s app_tx=%" PRIu64 " app_rx=%" PRIu64 " udp_tx=%" PRIu64
            " udp_rx=%" PRIu64 " wire_tx=%" PRIu64 " wire_rx=%" PRIu64 "\n",
         ep->server ? "server" : "client", result ? "FAIL" : "PASS",
         ep->tx_offset, ep->rx_len, ep->udp_sent, ep->udp_received,
@@ -537,10 +675,15 @@ void tb_print_stats(tb_endpoint *ep, int result) {
     }
     if (!ep->server && ep->verified)
         printf("[client] echo_ms=%.3f\n", (double)(ep->data_finished - ep->data_started) / 1e6);
+    if (!ep->server && ep->options->sensor)
+        printf("[sensor] sensor_generated=%u sensor_verified=%u\n",
+               ep->sensor_generated, ep->sensor_verified);
     if (result < -1) fprintf(stderr, "ngtcp2: %s\n", ngtcp2_strerror(result));
 }
 
 int tb_load_payload(tb_endpoint *ep) {
+    if (ep->options->sensor) return 0;
+    ep->tx_eof = true;
     if (!ep->options->input) {
         ep->tx_len = strlen(ep->options->message);
         if (ep->tx_len > TB_MAX_DATA) { fprintf(stderr, "Message exceeds 65536 bytes.\n"); return -1; }

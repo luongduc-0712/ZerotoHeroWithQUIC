@@ -1,6 +1,7 @@
 #include "client.h"
 #include "connection.h"
 #include "tls.h"
+#include <inttypes.h>
 
 int client_run(const tb_options *options) {
     tb_endpoint ep;
@@ -8,8 +9,8 @@ int client_run(const tb_options *options) {
     if (rv) return rv;
     if ((rv = tb_load_payload(&ep)) || (rv = tb_socket_open(&ep)) ||
         (rv = client_connection_new(&ep)) || (rv = client_tls_init(&ep))) goto done;
-    printf("[client] connecting to %s:%s UDP, payload=%zu bytes\n",
-        options->host, options->port, ep.tx_len);
+    printf("[client] connecting to %s:%s UDP, payload=%" PRIu64 " bytes%s\n",
+        options->host, options->port, ep.tx_len, options->sensor ? " (synthetic sensor)" : "");
     rv = tb_event_loop(&ep);
     if (!rv) rv = tb_save_echo(&ep);
 done:

@@ -6,3 +6,5 @@
 /certs/*.crt
 /tests/.tmp/
 /backup/
+logs/
+__pycache__/

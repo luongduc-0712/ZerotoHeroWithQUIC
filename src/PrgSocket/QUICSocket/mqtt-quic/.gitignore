@@ -1,0 +1,11 @@
+/clients/build/
+/clients/publisher
+/clients/subscriber
+/docker/certs/*.pem
+/docker/certs/*.key
+/docker/certs/*.crt
+/docker/certs/*.csr
+/docker/certs/*.srl
+/work/
+__pycache__/
+*.pyc

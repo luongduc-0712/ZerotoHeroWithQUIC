@@ -18,8 +18,8 @@
 typedef struct {
     const char *host, *port, *cert, *key, *ca, *server_name;
     const char *message, *input, *output;
-    unsigned timeout;
-    bool verbose;
+    unsigned timeout, interval_ms, count;
+    bool verbose, sensor;
 } tb_options;
 
 typedef struct {
@@ -33,8 +33,12 @@ typedef struct {
     const tb_options *options;
     int64_t stream_id;
     uint8_t tx[TB_MAX_DATA], rx[TB_MAX_DATA];
-    size_t tx_len, tx_offset, rx_len;
-    bool handshake, tx_ready, tx_fin, rx_fin, stream_done, verified;
+    /* Absolute stream offsets; tx[] is a fixed-address circular retransmit queue. */
+    uint64_t tx_len, tx_offset, tx_acked, rx_len;
+    bool handshake, tx_ready, tx_eof, tx_fin, rx_fin, stream_done, verified;
+    bool sensor_stopping;
+    unsigned sensor_generated, sensor_verified;
+    ngtcp2_tstamp next_sample;
     ngtcp2_tstamp started, deadline, handshake_at, data_started, data_finished;
     uint64_t udp_sent, udp_received, wire_sent, wire_received;
 } tb_endpoint;
